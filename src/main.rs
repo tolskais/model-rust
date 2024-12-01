@@ -1,133 +1,174 @@
+use core::str;
 use std::fs;
 use std::ops::Index;
 
-type Start = u8;
-type Length = u16;
+// ClassFile structure
+// https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.1
+const MAGIC_SIZE: usize = 4;
+const MINOR_SIZE: usize = 2;
+const MAJOR_SIZE: usize = 2;
+const CONSTANT_SIZE: usize = 2;
+// Pool Constant
+const ACCESS_FLAG_SIZE: usize = 2;
+const CLASS_SIZE: usize = 2;
+const SUPER_SIZE: usize = 2;
+const ITF_COUNT_SIZE: usize = 2;
+// Interfaces
+const FIELD_COUNT_SIZE: usize = 2;
+// Fields
+const METHOD_COUNT: usize = 2;
+// Methods
+const ATTRIBUTE_COUNT: usize = 2;
+// Attributes
 
-const MAGIC_SIZE: u8 = 4;
-const MINOR_SIZE: u8 = 2;
-const MAJOR_SIZE: u8 = 2;
-const CONSTANT_SIZE: u8 = 2;
+struct Constant {
+    value_type: ConstantPoolType,
+    index: usize
+}
 
 enum ConstantPoolType {
-    Class(Start),
-    FieldRef(Start),
-    MethodRef(Start),
-    InterfaceMethodRef(Start),
-    String(Start),
-    Integer(Start),
-    Float(Start),
-    Long(Start),
-    Double(Start),
-    NameAndType(Start),
-    Utf8(Start, Length),
-    MethodHandle(Start),
-    MethodType(Start),
-    Dynamic(Start),
-    InvokeDynamic(Start),
-    Module(Start),
-    Package(Start)
+    Class,
+    FieldRef,
+    MethodRef,
+    InterfaceMethodRef,
+    String,
+    Integer,
+    Float,
+    Long,
+    Double,
+    NameAndType,
+    Utf8(usize),
+    MethodHandle,
+    MethodType,
+    Dynamic,
+    InvokeDynamic,
+    Module,
+    Package
 }
 
 impl ConstantPoolType {
-    fn size_in_slot(&self) -> u8 {
+    fn size_in_slot(&self) -> usize {
         use ConstantPoolType::*;
 
         match self {
-            Class(_) | Package(_) | Module(_) | MethodType(_) | Utf8(_, _) | String(_) | MethodHandle(_) | InvokeDynamic(_) | Dynamic(_) | NameAndType(_) | Float(_) | Integer(_) | InterfaceMethodRef(_) | MethodRef(_) | FieldRef(_) => 1,
-            Double(_) | Long(_) => 2
+            Class | Package | Module | MethodType | Utf8(_) | String | MethodHandle | InvokeDynamic | Dynamic | NameAndType | Float | Integer | InterfaceMethodRef | MethodRef | FieldRef => 1,
+            Double | Long => 2
         }
     }
-    fn size_in_header(&self) -> u8 {
+    fn size_in_header(&self) -> usize {
         use ConstantPoolType::*;
 
         match self {
-            Class(_) | Package(_) | Module(_) | MethodType(_) | Utf8(_, _) | String(_) => 3,
-            MethodHandle(_) => 4,
-            InvokeDynamic(_) | Dynamic(_) | NameAndType(_) | Float(_) | Integer(_) | InterfaceMethodRef(_) | MethodRef(_) | FieldRef(_) => 5,
-            Double(_) | Long(_) => 9
+            Utf8(len) => 3 + len,
+            Class | Package | Module | MethodType | String => 3,
+            MethodHandle => 4,
+            InvokeDynamic | Dynamic | NameAndType | Float | Integer | InterfaceMethodRef | MethodRef | FieldRef => 5,
+            Double | Long => 9
         }
     }
 }
 
-struct ClassBuffer {
+struct ClassReader {
     buf: Vec<u8>
 }
 
-impl Index<u16> for ClassBuffer {
+impl Index<usize> for ClassReader {
     type Output = u8;
     
-    fn index(&self, index: u16) -> &Self::Output {
-        &self.buf[index as usize]
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.buf[index]
     }
 }
 
 
-impl ClassBuffer {
-    fn read(filename: &str) -> Self {
+impl ClassReader {
+    fn from_file(filename: &str) -> Self {
         Self {
             buf: fs::read(filename)
             .expect("asdf")
         }
     }
 
-    // Assume little endians
-    fn read_u16(&self, index: u16) -> u16 {
+    fn read_u16(&self, index: usize) -> u16 {
         ((self[index] as u16) << 8) | (self[index + 1] as u16)
     }
 
-    fn read_constants(&self) -> Result<Vec<ConstantPoolType>, &str> {
+    fn read_utf8(&self, def: &Constant) -> Result<&str, &str> {
+        match def.value_type {
+            ConstantPoolType::Utf8(len) => {
+                let start = def.index + 3;
+                let end = start + len;
+                Result::Ok(str::from_utf8(&self.buf[start..end]).expect("why"))
+            },
+            _ => Result::Err("what")
+        }
+    }
+
+    fn read_constants(&self) -> Result<(Vec<Constant>, usize), &str> {
         use ConstantPoolType::*;
 
-        let mut count = self.read_u16((MAGIC_SIZE + MAJOR_SIZE + MINOR_SIZE).into());
+        const CONSTANT_START_INDEX: usize = MAGIC_SIZE + MINOR_SIZE + MAJOR_SIZE;
+        let mut count = self.read_u16(CONSTANT_START_INDEX) as usize - 1;
         println!("# of constants: {count}");
 
-        let mut constants: Vec<ConstantPoolType> = Vec::with_capacity(count as usize);
+        let mut constants: Vec<Constant> = Vec::with_capacity(count as usize);
 
         // https://docs.oracle.com/javase/specs/jvms/se11/html/jvms-4.html
-        let mut index = MAGIC_SIZE + MAJOR_SIZE + MINOR_SIZE + CONSTANT_SIZE;
+        let mut item_index = CONSTANT_START_INDEX + CONSTANT_SIZE;
         while count > 0 {
-            let constant_type = self[index.into()];
-            let item = match constant_type {
-                7 => Class(index),
-                9 => FieldRef(index),
-                10 => MethodRef(index),
-                11 => InterfaceMethodRef(index),
-                8 => String(index),
-                3 => Integer(index),
-                4 => Float(index),
-                5 => Long(index),
-                6 => Double(index),
-                12 => NameAndType(index),
+            let constant_type = self[item_index.into()];
+            let value_type = match constant_type {
+                7 => Class,
+                9 => FieldRef,
+                10 => MethodRef,
+                11 => InterfaceMethodRef,
+                8 => String,
+                3 => Integer,
+                4 => Float,
+                5 => Long,
+                6 => Double,
+                12 => NameAndType,
                 1 => {
-                    let size = self.read_u16((index + 1).into());
-                    let ret = Utf8(index, size);
-                    index += u8::try_from(size).expect("The constant pool contains an unexpectly long utf8 constant.");
-                    ret
+                    let size = self.read_u16(item_index + 1) as usize;
+                    Utf8(size)
                 },
-                15 => MethodHandle(index),
-                16 => MethodType(index),
-                17 => Dynamic(index),
-                18 => InvokeDynamic(index),
-                19 => Module(index),
-                20 => Package(index),
-                _ => return Err("Could not read the constant")
+                15 => MethodHandle,
+                16 => MethodType,
+                17 => Dynamic,
+                18 => InvokeDynamic,
+                19 => Module,
+                20 => Package,
+                _ => return Err("Unknown constant type: {}")
             };
 
-            index += item.size_in_header();
-            count -= u16::from(item.size_in_slot());
+            let index = item_index;
+            item_index += value_type.size_in_header();
+            count -= value_type.size_in_slot();
 
-            println!("{index}: {count}");
-
-            constants.push(item);
+            constants.push(Constant {
+                value_type,
+                index
+            });            
         }
 
-        return Ok(constants);
+        return Ok((constants, item_index));
     }
 }
 
 fn main() {
-    let buffer = ClassBuffer::read("test.class");
-    let constants = buffer.read_constants();
+    let reader = ClassReader::from_file("test.class");
+    let (constants, end_index) = reader.read_constants().expect("Could not parse the header");
     
+    let interface_index = end_index + ACCESS_FLAG_SIZE + CLASS_SIZE + SUPER_SIZE;
+    let interface_count = reader.read_u16(interface_index) as usize;
+    let field_index = interface_index + ITF_COUNT_SIZE + (ConstantPoolType::Class.size_in_header() * interface_count);
+    let field_count = reader.read_u16(field_index) as usize;
+    let method_index = field_index + FIELD_COUNT_SIZE + (ConstantPoolType::FieldRef.size_in_header() * field_count);
+    let method_count = reader.read_u16(method_index) as usize;
+
+    let method_name_index = usize::from(reader.read_u16(method_index + METHOD_COUNT + 2));
+    println!("{method_name_index}");
+    let name_constant = constants.get(method_name_index - 1).expect("Could not read the method name");
+    let method_name = reader.read_utf8(name_constant).expect("???");
+    println!("{}", method_name);
 }
