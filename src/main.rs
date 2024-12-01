@@ -1,13 +1,13 @@
 use std::fs;
 use std::ops::Index;
 
-type Start = u16;
+type Start = u8;
 type Length = u16;
 
-const MAGIC_SIZE: u16 = 4;
-const MINOR_SIZE: u16 = 2;
-const MAJOR_SIZE: u16 = 2;
-const CONSTANT_SIZE: u16 = 2;
+const MAGIC_SIZE: u8 = 4;
+const MINOR_SIZE: u8 = 2;
+const MAJOR_SIZE: u8 = 2;
+const CONSTANT_SIZE: u8 = 2;
 
 enum ConstantPoolType {
     Class(Start),
@@ -33,7 +33,7 @@ impl ConstantPoolType {
     fn size_in_slot(&self) -> u8 {
         use ConstantPoolType::*;
 
-        match(self) {
+        match self {
             Class(_) | Package(_) | Module(_) | MethodType(_) | Utf8(_, _) | String(_) | MethodHandle(_) | InvokeDynamic(_) | Dynamic(_) | NameAndType(_) | Float(_) | Integer(_) | InterfaceMethodRef(_) | MethodRef(_) | FieldRef(_) => 1,
             Double(_) | Long(_) => 2
         }
@@ -41,7 +41,7 @@ impl ConstantPoolType {
     fn size_in_header(&self) -> u8 {
         use ConstantPoolType::*;
 
-        match(self) {
+        match self {
             Class(_) | Package(_) | Module(_) | MethodType(_) | Utf8(_, _) | String(_) => 3,
             MethodHandle(_) => 4,
             InvokeDynamic(_) | Dynamic(_) | NameAndType(_) | Float(_) | Integer(_) | InterfaceMethodRef(_) | MethodRef(_) | FieldRef(_) => 5,
@@ -79,7 +79,7 @@ impl ClassBuffer {
     fn read_constants(&self) -> Result<Vec<ConstantPoolType>, &str> {
         use ConstantPoolType::*;
 
-        let mut count = self.read_u16(8);
+        let mut count = self.read_u16((MAGIC_SIZE + MAJOR_SIZE + MINOR_SIZE).into());
         println!("# of constants: {count}");
 
         let mut constants: Vec<ConstantPoolType> = Vec::with_capacity(count as usize);
@@ -87,7 +87,7 @@ impl ClassBuffer {
         // https://docs.oracle.com/javase/specs/jvms/se11/html/jvms-4.html
         let mut index = MAGIC_SIZE + MAJOR_SIZE + MINOR_SIZE + CONSTANT_SIZE;
         while count > 0 {
-            let constant_type = self[index];
+            let constant_type = self[index.into()];
             let item = match constant_type {
                 7 => Class(index),
                 9 => FieldRef(index),
@@ -100,9 +100,9 @@ impl ClassBuffer {
                 6 => Double(index),
                 12 => NameAndType(index),
                 1 => {
-                    let size = self.read_u16(index + 1);
+                    let size = self.read_u16((index + 1).into());
                     let ret = Utf8(index, size);
-                    index += size;
+                    index += u8::try_from(size).expect("The constant pool contains an unexpectly long utf8 constant.");
                     ret
                 },
                 15 => MethodHandle(index),
@@ -114,7 +114,7 @@ impl ClassBuffer {
                 _ => return Err("Could not read the constant")
             };
 
-            index += u16::from(item.size_in_header());
+            index += item.size_in_header();
             count -= u16::from(item.size_in_slot());
 
             println!("{index}: {count}");
@@ -129,4 +129,5 @@ impl ClassBuffer {
 fn main() {
     let buffer = ClassBuffer::read("test.class");
     let constants = buffer.read_constants();
+    
 }
