@@ -4,26 +4,26 @@ use std::ops::Index;
 
 // ClassFile structure
 // https://docs.oracle.com/javase/specs/jvms/se7/html/jvms-4.html#jvms-4.1
-const MAGIC_SIZE: usize = 4;
-const MINOR_SIZE: usize = 2;
-const MAJOR_SIZE: usize = 2;
-const CONSTANT_SIZE: usize = 2;
+const MAGIC_SIZE: u16 = 4;
+const MINOR_SIZE: u16 = 2;
+const MAJOR_SIZE: u16 = 2;
+const CONSTANT_SIZE: u16 = 2;
 // Pool Constant
-const ACCESS_FLAG_SIZE: usize = 2;
-const CLASS_SIZE: usize = 2;
-const SUPER_SIZE: usize = 2;
-const ITF_COUNT_SIZE: usize = 2;
+const ACCESS_FLAG_SIZE: u16 = 2;
+const CLASS_SIZE: u16 = 2;
+const SUPER_SIZE: u16 = 2;
+const ITF_COUNT_SIZE: u16 = 2;
 // Interfaces
-const FIELD_COUNT_SIZE: usize = 2;
+const FIELD_COUNT_SIZE: u16 = 2;
 // Fields
-const METHOD_COUNT: usize = 2;
+const METHOD_COUNT: u16 = 2;
 // Methods
-const ATTRIBUTE_COUNT: usize = 2;
+const ATTRIBUTE_COUNT: u16 = 2;
 // Attributes
 
 struct Constant {
     value_type: ConstantPoolType,
-    index: usize
+    index: u16
 }
 
 enum ConstantPoolType {
@@ -37,7 +37,7 @@ enum ConstantPoolType {
     Long,
     Double,
     NameAndType,
-    Utf8(usize),
+    Utf8(u16),
     MethodHandle,
     MethodType,
     Dynamic,
@@ -47,7 +47,7 @@ enum ConstantPoolType {
 }
 
 impl ConstantPoolType {
-    fn size_in_slot(&self) -> usize {
+    fn size_in_slot(&self) -> u16 {
         use ConstantPoolType::*;
 
         match self {
@@ -59,7 +59,7 @@ impl ConstantPoolType {
         use ConstantPoolType::*;
 
         match self {
-            Utf8(len) => 3 + len,
+            Utf8(len) => (3 + len) as usize,
             Class | Package | Module | MethodType | String => 3,
             MethodHandle => 4,
             InvokeDynamic | Dynamic | NameAndType | Float | Integer | InterfaceMethodRef | MethodRef | FieldRef => 5,
@@ -96,8 +96,8 @@ impl ClassReader {
     fn read_utf8(&self, def: &Constant) -> Result<&str, &str> {
         match def.value_type {
             ConstantPoolType::Utf8(len) => {
-                let start = def.index + 3;
-                let end = start + len;
+                let start = def.index as usize + 3;
+                let end = start + len as usize;
                 Result::Ok(str::from_utf8(&self.buf[start..end]).expect("why"))
             },
             _ => Result::Err("what")
@@ -107,16 +107,16 @@ impl ClassReader {
     fn read_constants(&self) -> Result<(Vec<Constant>, usize), &str> {
         use ConstantPoolType::*;
 
-        const CONSTANT_START_INDEX: usize = MAGIC_SIZE + MINOR_SIZE + MAJOR_SIZE;
-        let mut count = self.read_u16(CONSTANT_START_INDEX) as usize - 1;
+        const CONSTANT_START_INDEX: u16 = MAGIC_SIZE + MINOR_SIZE + MAJOR_SIZE;
+        let mut count = self.read_u16(CONSTANT_START_INDEX as usize) - 1;
         println!("# of constants: {count}");
 
         let mut constants: Vec<Constant> = Vec::with_capacity(count as usize);
 
         // https://docs.oracle.com/javase/specs/jvms/se11/html/jvms-4.html
-        let mut item_index = CONSTANT_START_INDEX + CONSTANT_SIZE;
+        let mut item_index = (CONSTANT_START_INDEX + CONSTANT_SIZE) as usize;
         while count > 0 {
-            let constant_type = self[item_index.into()];
+            let constant_type = self[item_index];
             let value_type = match constant_type {
                 7 => Class,
                 9 => FieldRef,
@@ -129,7 +129,7 @@ impl ClassReader {
                 6 => Double,
                 12 => NameAndType,
                 1 => {
-                    let size = self.read_u16(item_index + 1) as usize;
+                    let size = self.read_u16(item_index + 1);
                     Utf8(size)
                 },
                 15 => MethodHandle,
@@ -141,7 +141,7 @@ impl ClassReader {
                 _ => return Err("Unknown constant type: {}")
             };
 
-            let index = item_index;
+            let index = item_index as u16;
             item_index += value_type.size_in_header();
             count -= value_type.size_in_slot();
 
@@ -159,14 +159,14 @@ fn main() {
     let reader = ClassReader::from_file("test.class");
     let (constants, end_index) = reader.read_constants().expect("Could not parse the header");
     
-    let interface_index = end_index + ACCESS_FLAG_SIZE + CLASS_SIZE + SUPER_SIZE;
-    let interface_count = reader.read_u16(interface_index) as usize;
-    let field_index = interface_index + ITF_COUNT_SIZE + (ConstantPoolType::Class.size_in_header() * interface_count);
-    let field_count = reader.read_u16(field_index) as usize;
-    let method_index = field_index + FIELD_COUNT_SIZE + (ConstantPoolType::FieldRef.size_in_header() * field_count);
-    let method_count = reader.read_u16(method_index) as usize;
+    let interface_index = end_index + (ACCESS_FLAG_SIZE + CLASS_SIZE + SUPER_SIZE) as usize;
+    let interface_count = reader.read_u16(interface_index);
+    let field_index = interface_index + ITF_COUNT_SIZE as usize + (ConstantPoolType::Class.size_in_header() * interface_count as usize);
+    let field_count = reader.read_u16(field_index);
+    let method_index = field_index + FIELD_COUNT_SIZE as usize + (ConstantPoolType::FieldRef.size_in_header() * field_count as usize);
+    let method_count = reader.read_u16(method_index);
 
-    let method_name_index = usize::from(reader.read_u16(method_index + METHOD_COUNT + 2));
+    let method_name_index = reader.read_u16(method_index + METHOD_COUNT as usize + 2) as usize;
     println!("{method_name_index}");
     let name_constant = constants.get(method_name_index - 1).expect("Could not read the method name");
     let method_name = reader.read_utf8(name_constant).expect("???");
